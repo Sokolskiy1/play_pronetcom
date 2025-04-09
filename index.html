@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>РОГАЛИК</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #222;
+            color: #eee;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .field {
+            display: grid;
+            grid-template-columns: repeat(40, 32px);
+            grid-template-rows: repeat(24, 32px);
+            gap: 1px;
+            margin-bottom: 20px;
+            border: 2px solid #555;
+        }
+
+        .tile {
+            width: 32px;
+            height: 32px;
+            background-color: #333;
+            position: relative;
+            background-size: cover;
+        }
+
+        .health {
+            height: 3px;
+            background-color: #e74c3c;
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+        }
+
+        .health-bar {
+            height: 100%;
+        }
+
+        .player-health .health-bar {
+            background-color: #3498db;
+        }
+
+        .stats {
+            margin-bottom: 20px;
+            font-size: 18px;
+        }
+
+        .controls {
+            margin-top: 20px;
+        }
+
+        button {
+            padding: 10px 15px;
+            margin: 0 5px;
+            background-color: #444;
+            color: #eee;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #555;
+        }
+
+        .message {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #444;
+            border-radius: 4px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+<div class="game-container">
+    <h1>РОГАЛИК</h1>
+
+    <div class="stats">
+        <div>Здоровье: <span id="player-health">100</span>%</div>
+        <div>Сила атаки: <span id="player-attack">10</span></div>
+        <div>Убито врагов: <span id="enemies-killed">0</span>/10</div>
+    </div>
+
+    <div class="field"></div>
+
+    <div class="controls">
+        <p>Управление: WASD для движения, Пробел для атаки</p>
+    </div>
+
+    <div class="message" id="message"></div>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script>
+    const WIDTH = 40;
+    const HEIGHT = 24;
+    const WALL = 0;
+    const FLOOR = 1;
+    const PLAYER = 2;
+    const ENEMY = 3;
+    const SWORD = 4;
+    const POTION = 5;
+
+    const IMAGE_PATHS = {
+        [WALL]: 'images/tile-W.png',
+        [FLOOR]: 'images/tile-.png',
+        [PLAYER]: 'images/tile-P.png',
+        [ENEMY]: 'images/tile-E.png',
+        [SWORD]: 'images/tile-SW.png',
+        [POTION]: 'images/tile-HP.png'
+    };
+
+    var gameState = {
+        map: [],
+        player: { x: 0, y: 0, health: 100, maxHealth: 100, attack: 10 },
+        enemies: [],
+        items: [],
+        enemiesKilled: 0,
+        gameOver: false,
+        imagesLoaded: false
+    };
+
+    function loadImages(callback) {
+        var loaded = 0;
+        var total = Object.keys(IMAGE_PATHS).length;
+
+        for (var type in IMAGE_PATHS) {
+            var img = new Image();
+            img.onload = function() {
+                loaded++;
+                if (loaded === total) {
+                    gameState.imagesLoaded = true;
+                    callback();
+                }
+            };
+            img.onerror = function() {
+                console.error("Ошибка загрузки изображения: " + this.src);
+                loaded++;
+                if (loaded === total) {
+                    gameState.imagesLoaded = true;
+                    callback();
+                }
+            };
+            img.src = IMAGE_PATHS[type];
+            IMAGE_PATHS[type] = img;
+        }
+    }
+
+    function initGame() {
+        loadImages(function() {
+            generateMap();
+            placePlayer();
+            placeEnemies(10);
+            placeItems(SWORD, 2);
+            placeItems(POTION, 10);
+            render();
+
+            $(document).keydown(function(e) {
+                if (gameState.gameOver) return;
+
+                var key = e.key.toLowerCase();
+                var moved = false;
+
+                if (key === 'w') moved = movePlayer(0, -1);
+                else if (key === 'a') moved = movePlayer(-1, 0);
+                else if (key === 's') moved = movePlayer(0, 1);
+                else if (key === 'd') moved = movePlayer(1, 0);
+                else if (key === ' ') {
+                    attackEnemies();
+                    moved = true;
+                }
+
+                if (moved) {
+                    moveEnemies();
+                    render();
+                    checkGameOver();
+                }
+            });
+        });
+    }
+
+    function generateMap() {
+        for (var y = 0; y < HEIGHT; y++) {
+            gameState.map[y] = [];
+            for (var x = 0; x < WIDTH; x++) {
+                gameState.map[y][x] = WALL;
+            }
+        }
+
+        var roomCount = getRandomInt(5, 10);
+        for (var i = 0; i < roomCount; i++) {
+            createRoom();
+        }
+
+        var passageCount = getRandomInt(3, 5);
+        for (var i = 0; i < passageCount; i++) {
+            createHorizontalPassage();
+            createVerticalPassage();
+        }
+
+        ensureAccessibility();
+    }
+
+    function createRoom() {
+        var width = getRandomInt(3, 8);
+        var height = getRandomInt(3, 8);
+        var x = getRandomInt(1, WIDTH - width - 1);
+        var y = getRandomInt(1, HEIGHT - height - 1);
+
+        for (var dy = 0; dy < height; dy++) {
+            for (var dx = 0; dx < width; dx++) {
+                gameState.map[y + dy][x + dx] = FLOOR;
+            }
+        }
+    }
+
+    function createHorizontalPassage() {
+        var y = getRandomInt(1, HEIGHT - 2);
+        var x1 = getRandomInt(1, WIDTH / 2);
+        var x2 = getRandomInt(WIDTH / 2, WIDTH - 2);
+
+        for (var x = x1; x <= x2; x++) {
+            gameState.map[y][x] = FLOOR;
+            if (Math.random() < 0.2) {//0.7
+                if (y > 1) gameState.map[y-1][x] = FLOOR;
+                if (y < HEIGHT - 2) gameState.map[y+1][x] = FLOOR;
+            }
+        }
+    }
+
+    function createVerticalPassage() {
+        var x = getRandomInt(1, WIDTH - 2);
+        var y1 = getRandomInt(1, HEIGHT / 2);
+        var y2 = getRandomInt(HEIGHT / 2, HEIGHT - 2);
+
+        for (var y = y1; y <= y2; y++) {
+            gameState.map[y][x] = FLOOR;
+            if (Math.random() < 0.2) {
+                if (x > 1) gameState.map[y][x-1] = FLOOR;
+                if (x < WIDTH - 2) gameState.map[y][x+1] = FLOOR;
+            }
+        }
+    }
+
+    function ensureAccessibility() {
+        var floorCount = 0;
+        for (var y = 0; y < HEIGHT; y++) {
+            for (var x = 0; x < WIDTH; x++) {
+                if (gameState.map[y][x] === FLOOR) floorCount++;
+            }
+        }
+
+        if (floorCount < (WIDTH * HEIGHT * 0.2)) {
+            generateMap();
+        }
+    }
+
+    function placePlayer() {
+        var position = findEmptyPosition();
+        gameState.player.x = position.x;
+        gameState.player.y = position.y;
+        gameState.map[position.y][position.x] = PLAYER;
+    }
+
+    function placeEnemies(count) {
+        for (var i = 0; i < count; i++) {
+            var position = findEmptyPosition();
+            gameState.enemies.push({
+                x: position.x,
+                y: position.y,
+                health: 100,
+                maxHealth: 100,
+                attack: 5
+            });
+            gameState.map[position.y][position.x] = ENEMY;
+        }
+    }
+
+    function placeItems(itemType, count) {
+        for (var i = 0; i < count; i++) {
+            var position = findEmptyPosition();
+            gameState.items.push({
+                x: position.x,
+                y: position.y,
+                type: itemType
+            });
+            gameState.map[position.y][position.x] = itemType;
+        }
+    }
+
+    function findEmptyPosition() {
+        var x, y;
+        do {
+            x = getRandomInt(0, WIDTH - 1);
+            y = getRandomInt(0, HEIGHT - 1);
+        } while (gameState.map[y][x] !== FLOOR);
+
+        return { x: x, y: y };
+    }
+
+    function movePlayer(dx, dy) {
+        var newX = gameState.player.x + dx;
+        var newY = gameState.player.y + dy;
+
+        if (newX < 0 || newX >= WIDTH || newY < 0 || newY >= HEIGHT) {
+            return false;
+        }
+
+        if (gameState.map[newY][newX] === WALL) {
+            return false;
+        }
+
+        var itemIndex = findItem(newX, newY);
+        if (itemIndex !== -1) {
+            var item = gameState.items[itemIndex];
+            if (item.type === POTION) {
+                gameState.player.health = Math.min(
+                    gameState.player.health + 20,
+                    gameState.player.maxHealth
+                );
+                showMessage("Вы нашли зелье здоровья! +20 HP");
+            } else if (item.type === SWORD) {
+                gameState.player.attack += 5;
+                showMessage("Вы нашли меч! +5 к атаке");
+            }
+
+            gameState.items.splice(itemIndex, 1);
+        }
+
+        var enemyIndex = findEnemy(newX, newY);
+        if (enemyIndex !== -1) {
+            return false;
+        }
+
+        gameState.map[gameState.player.y][gameState.player.x] = FLOOR;
+        gameState.player.x = newX;
+        gameState.player.y = newY;
+        gameState.map[newY][newX] = PLAYER;
+
+        return true;
+    }
+
+    function attackEnemies() {
+        var directions = [
+            {dx: -1, dy: -1}, {dx: 0, dy: -1}, {dx: 1, dy: -1},
+            {dx: -1, dy: 0},                   {dx: 1, dy: 0},
+            {dx: -1, dy: 1},  {dx: 0, dy: 1},  {dx: 1, dy: 1}
+        ];
+
+        var attacked = false;
+
+        for (var i = 0; i < directions.length; i++) {
+            var dir = directions[i];
+            var x = gameState.player.x + dir.dx;
+            var y = gameState.player.y + dir.dy;
+
+            if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT) {
+                var enemyIndex = findEnemy(x, y);
+                if (enemyIndex !== -1) {
+                    var enemy = gameState.enemies[enemyIndex];
+                    enemy.health -= gameState.player.attack;
+
+                    if (enemy.health <= 0) {
+                        gameState.map[y][x] = FLOOR;
+                        gameState.enemies.splice(enemyIndex, 1);
+                        gameState.enemiesKilled++;
+                        showMessage("Вы убили врага!");
+                    }
+
+                    attacked = true;
+                }
+            }
+        }
+
+        if (attacked) {
+            showMessage("Вы атаковали врагов!");
+        } else {
+            showMessage("Нет врагов рядом для атаки!");
+        }
+
+        return attacked;
+    }
+
+    function moveEnemies() {
+        for (var i = 0; i < gameState.enemies.length; i++) {
+            var enemy = gameState.enemies[i];
+
+            var playerNearby = Math.abs(enemy.x - gameState.player.x) <= 1 &&
+                Math.abs(enemy.y - gameState.player.y) <= 1;
+
+            if (playerNearby) {
+                gameState.player.health -= enemy.attack;
+                showMessage("Враг атаковал вас! -" + enemy.attack + " HP");
+            } else {
+                var directions = [
+                    {dx: -1, dy: 0}, {dx: 1, dy: 0},
+                    {dx: 0, dy: -1}, {dx: 0, dy: 1}
+                ];
+
+                directions.sort(function() { return 0.5 - Math.random(); });
+
+                var moved = false;
+                for (var j = 0; j < directions.length && !moved; j++) {
+                    var dir = directions[j];
+                    var newX = enemy.x + dir.dx;
+                    var newY = enemy.y + dir.dy;
+
+                    if (newX >= 0 && newX < WIDTH && newY >= 0 && newY < HEIGHT) {
+                        if (gameState.map[newY][newX] === FLOOR) {
+                            gameState.map[enemy.y][enemy.x] = FLOOR;
+                            enemy.x = newX;
+                            enemy.y = newY;
+                            gameState.map[newY][newX] = ENEMY;
+                            moved = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    function findEnemy(x, y) {
+        for (var i = 0; i < gameState.enemies.length; i++) {
+            if (gameState.enemies[i].x === x && gameState.enemies[i].y === y) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    function findItem(x, y) {
+        for (var i = 0; i < gameState.items.length; i++) {
+            if (gameState.items[i].x === x && gameState.items[i].y === y) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    function checkGameOver() {
+        if (gameState.player.health <= 0) {
+            gameState.gameOver = true;
+            showMessage("Игра окончена! Вы погибли.", true);
+        } else if (gameState.enemiesKilled >= 10) {
+            gameState.gameOver = true;
+            showMessage("Поздравляем! Вы победили всех врагов!", true);
+        }
+    }
+
+    function showMessage(text, persistent) {
+        var $message = $('#message');
+        $message.text(text).fadeIn();
+
+        if (!persistent) {
+            setTimeout(function() {
+                $message.fadeOut();
+            }, 2000);
+        }
+    }
+
+    function render() {
+        if (!gameState.imagesLoaded) return;
+
+        var $field = $('.field');
+        $field.empty();
+
+        $('#player-health').text(gameState.player.health);
+        $('#player-attack').text(gameState.player.attack);
+        $('#enemies-killed').text(gameState.enemiesKilled);
+
+        for (var y = 0; y < HEIGHT; y++) {
+            for (var x = 0; x < WIDTH; x++) {
+                var tileType = gameState.map[y][x];
+                var $tile = $('<div class="tile"></div>');
+
+                $tile.css('background-image', 'url(' + IMAGE_PATHS[tileType].src + ')');
+
+                if (tileType === PLAYER) {
+                    var healthPercent = (gameState.player.health / gameState.player.maxHealth) * 100;
+                    $tile.append('<div class="health player-health"><div class="health-bar" style="width:' + healthPercent + '%"></div></div>');
+                } else if (tileType === ENEMY) {
+                    var enemyIndex = findEnemy(x, y);
+                    if (enemyIndex !== -1) {
+                        var enemy = gameState.enemies[enemyIndex];
+                        var healthPercent = (enemy.health / enemy.maxHealth) * 100;
+                        $tile.append('<div class="health"><div class="health-bar" style="width:' + healthPercent + '%"></div></div>');
+                    }
+                }
+
+                $field.append($tile);
+            }
+        }
+
+
+    }
+
+    function getRandomInt(min, max) {
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    $(document).ready(function() {
+        initGame();
+    });
+</script>
+</body>
+</html>
